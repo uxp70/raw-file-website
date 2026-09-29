@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raw File Website</title>
+<meta name="description" content="Raw File Website — upload files and share them through raw links. Works on GitHub Pages.">
+<style>
+:root{--bg:#0b1020;--card:#151c33;--line:#263054;--txt:#eaf0ff;--mut:#9aa7c7;--acc:#5b8cff;--acc2:#22c55e}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+header{padding:28px 20px 10px;max-width:1000px;margin:auto}
+h1{margin:0;font-size:clamp(24px,4vw,38px)}h1 span{color:var(--acc)}
+.sub{color:var(--mut);margin:8px 0 0}
+.mode{display:inline-block;margin-top:12px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;font-size:13px;color:var(--mut)}
+.mode b{color:var(--txt)}
+main{max-width:1000px;margin:auto;padding:16px 20px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+input,select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0e1430;color:var(--txt)}
+input[type=file]{padding:8px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:640px){.row{grid-template-columns:1fr}}
+button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-weight:600;background:var(--acc);color:#fff}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+button.small{padding:7px 10px;font-size:13px}
+button:disabled{opacity:.5;cursor:not-allowed}
+#drop{border:2px dashed var(--acc);border-radius:14px;padding:34px 18px;text-align:center;background:#0e1430}
+#drop.over{background:#16205a}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.toolbar input,.toolbar select{width:auto;flex:1;min-width:160px}
+.file{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0;background:#0e1430}
+.file .meta{flex:1;min-width:0}.name{font-weight:700;word-break:break-all}.detail{color:var(--mut);font-size:13px;margin:4px 0}
+.link{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all;background:#0b1020;border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0;color:#bcd0ff}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+progress{width:100%;height:8px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#101736;border:1px solid var(--acc);padding:10px 16px;border-radius:999px;display:none}
+.note{font-size:13px;color:var(--mut)}a{color:#8fb0ff}
+</style>
+</head>
+<body>
+<header>
+<h1>📦 <span>Raw File Website</span></h1>
+<p class="sub">Upload anything, get a <b>raw link</b> you can copy, share, hotlink or embed. Static — deploys free on <b>GitHub Pages</b>.</p>
+<div class="mode" id="modeBadge">Detecting mode…</div>
+</header>
+<main>
+<section class="card" id="serverCard" hidden>
+<h2 style="margin:0 0 8px">⬆️ Upload (unlimited server mode)</h2>
+<div id="drop" role="button" tabindex="0" aria-label="Drop files here or press Enter to browse">
+<p><b>Drag &amp; drop files here</b> or <button class="ghost small" id="browseBtn" type="button">Browse files</button></p>
+<p class="note">No file-size limit in self-host mode — files stream straight to disk.</p>
+<input type="file" id="fileInput" multiple hidden aria-label="Choose files to upload">
+</div>
+<div id="uploads"></div>
+</section>
+
+<section class="card" id="ghCard" hidden>
+<h2 style="margin:0 0 8px">⚙️ GitHub Pages storage setup (one time)</h2>
+<p class="note">GitHub Pages is <b>static-only</b> — it can't run an upload server. So this page stores uploads <b>inside your own repo</b> via the GitHub API, which gives you real raw links like <code>https://raw.githubusercontent.com/OWNER/REPO/BRANCH/uploads/…</code> that work everywhere. GitHub enforces <b>100&nbsp;MB per file</b> — truly unlimited sizes need the self-host <code>server.js</code> (see README).</p>
+<div class="row">
+<div><label for="owner">Repo owner</label><input id="owner" placeholder="octocat" autocomplete="username"></div>
+<div><label for="repo">Repo name</label><input id="repo" placeholder="raw-file-website"></div>
+</div>
+<div class="row">
+<div><label for="branch">Branch</label><input id="branch" value="main"></div>
+<div><label for="token">Fine-grained PAT (contents: read+write)</label><input id="token" type="password" placeholder="github_pat_…" autocomplete="off"></div>
+</div>
+<div class="toolbar">
+<button id="saveCfg" type="button">Save settings</button>
+<button id="testCfg" class="ghost" type="button">Test connection</button>
+<span class="note" id="cfgMsg"></span>
+</div>
+<p class="note">Create token: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained → select this repo → Contents: Read and write. Token stays in <b>your browser localStorage only</b>.</p>
+<div id="dropGh" role="button" tabindex="0" aria-label="Drop files here or press Enter to browse">
+<div id="drop2" style="border:2px dashed var(--acc);border-radius:14px;padding:28px 16px;text-align:center;background:#0e1430">
+<p><b>Drag &amp; drop files here</b> or <button class="ghost small" id="browseGh" type="button">Browse files</button></p>
+<input type="file" id="fileGh" multiple hidden aria-label="Choose files to upload to GitHub">
+</div>
+</div>
+<div id="uploadsGh"></div>
+</section>
+
+<section class="card">
+<div class="toolbar">
+<input id="q" type="search" placeholder="🔍 Search files…" aria-label="Search files">
+<select id="sort" aria-label="Sort files"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="big">Largest first</option><option value="name">Name A–Z</option></select>
+<button id="refresh" class="ghost" type="button">↻ Refresh</button>
+</div>
+<div id="list"><p class="note">Loading…</p></div>
+</section>
+
+<section class="card">
+<h3 style="margin:0 0 8px">🔗 How raw links work</h3>
+<p class="note" id="howRaw">…</p>
+</section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const $=id=>document.getElementById(id);
+const toast=m=>{const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',2200)};
+const fmt=n=>{if(n==null)return'?';if(n<1024)return n+' B';const u=['KB','MB','GB','TB'];let i=-1;do{n/=1024;i++}while(n>=1024&&i<u.length-1);return n.toFixed(n<10?2:1)+' '+u[i]};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function copyText(t){try{await navigator.clipboard.writeText(t);toast('Raw link copied ✅')}catch{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('Raw link copied ✅')}}
+let MODE='github', FILES=[];
+async function detect(){try{const r=await fetch('api/health',{cache:'no-store'});if(r.ok){const j=await r.json();if(j.ok){MODE='server'}}}catch{} 
+const b=$('modeBadge');
+if(MODE==='server'){$('serverCard').hidden=false;$('ghCard').hidden=true;b.innerHTML='Mode: <b>Self-host server</b> — unlimited size, raw links <b>/raw/&lt;id&gt;</b>';$('howRaw').innerHTML='Files stream to <code>uploads/</code> on your server with no size limit. Raw link = <code>'+esc(location.origin)+'/raw/&lt;id&gt;</code> — served inline with correct Content-Type + Range support, so images, video, audio and embeds just work. Click <b>Copy raw link</b> on any file.'}
+else{$('serverCard').hidden=true;$('ghCard').hidden=false;b.innerHTML='Mode: <b>GitHub Pages (static)</b> — files stored in your repo, raw links via <b>raw.githubusercontent.com</b>';$('howRaw').innerHTML='On GitHub Pages there is no server, so uploads are committed to <code>uploads/</code> in your repo via the GitHub API. Raw link = <code>https://raw.githubusercontent.com/OWNER/REPO/BRANCH/uploads/…</code> and Pages link = <code>https://OWNER.github.io/REPO/uploads/…</code>. Both are permanent, hotlinkable and copy-ready. GitHub caps files at <b>100 MB</b>.';loadCfg()}
+await refresh()}
+ // ---------- SERVER MODE ----------
+async function refresh(){if(MODE==='server'){const r=await fetch('api/files');FILES=await r.json()}else{FILES=await ghList()}render()}
+function render(){const q=($('q').value||'').toLowerCase(),s=$('sort').value;let f=FILES.filter(x=>(x.original||x.name||'').toLowerCase().includes(q));
+if(s==='new')f.sort((a,b)=>new Date(b.uploadedAt||b.date)-new Date(a.uploadedAt||a.date));if(s==='old')f.sort((a,b)=>new Date(a.uploadedAt||a.date)-new Date(b.uploadedAt||b.date));if(s==='big')f.sort((a,b)=>(b.size||0)-(a.size||0));if(s==='name')f.sort((a,b)=>String(a.original||a.name).localeCompare(b.original||b.name));
+const L=$('list');if(!f.length){L.innerHTML='<p class="note">No files yet — upload something above.</p>';return}
+L.innerHTML=f.map(e=>{const raw=e.rawUrl||(location.origin+'/raw/'+e.id);const name=esc(e.original||e.name);return `<div class="file"><div class="meta"><div class="name">${name}</div><div class="detail">${fmt(e.size)} • ${esc((e.uploadedAt||e.date||'').toString().slice(0,19).replace('T',' '))} • ${esc(e.mime||'')}</div><div class="link">${esc(raw)}</div><div class="actions"><button class="small" data-copy="${esc(raw)}">📋 Copy raw link</button><a href="${esc(raw)}" target="_blank" rel="noopener"><button class="small ghost" type="button">↗ Open raw</button></a><a href="${esc(raw)}" download="${esc(e.original||e.name||'file')}"><button class="small ghost" type="button">⬇ Download</button></a><button class="small ghost" data-del="${esc(e.id||e.path||'')}">🗑 Delete</button></div></div></div>`}).join('');
+L.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
+L.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this file?'))return;if(MODE==='server'){await fetch('api/files/'+encodeURIComponent(b.dataset.del),{method:'DELETE'})}else{await ghDelete(b.dataset.del)}toast('Deleted');refresh()})}
+$('q').oninput=render;$('sort').onchange=render;$('refresh').onclick=refresh;
+// server upload (raw body stream, unlimited)
+function upServer(file){const box=document.createElement('div');box.className='file';box.innerHTML=`<div class="meta"><div class="name">${esc(file.name)}</div><progress max="100" value="0"></progress><div class="detail upmsg">0%</div><div class="link" hidden></div><div class="actions" hidden><button class="small" type="button">📋 Copy raw link</button></div></div>`;$('uploads').prepend(box);
+const bar=box.querySelector('progress'),msg=box.querySelector('.upmsg');const xhr=new XMLHttpRequest();xhr.open('POST','api/upload?filename='+encodeURIComponent(file.name));xhr.setRequestHeader('Content-Type',file.type||'application/octet-stream');
+xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);bar.value=p;msg.textContent=p+'% • '+fmt(e.loaded)+' / '+fmt(e.total)}};
+xhr.onload=()=>{try{const j=JSON.parse(xhr.responseText);const raw=location.origin+'/raw/'+j.id;box.querySelector('.link').hidden=false;box.querySelector('.link').textContent=raw;const ab=box.querySelector('.actions');ab.hidden=false;ab.querySelector('button').onclick=()=>copyText(raw);msg.textContent='Done • '+fmt(j.size);refresh()}catch{msg.textContent='Upload failed'}};
+xhr.onerror=()=>msg.textContent='Upload failed';xhr.send(file)}
+const fi=$('fileInput');$('browseBtn').onclick=e=>{e.stopPropagation();fi.click()};$('drop').onclick=e=>{if(e.target.tagName!=='BUTTON')fi.click()};fi.onchange=()=>{[...fi.files].forEach(upServer);fi.value=''};['dragover','dragenter'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.add('over')}));['dragleave','drop'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.remove('over')}));$('drop').addEventListener('drop',e=>{[...e.dataTransfer.files].forEach(upServer)});
+// ---------- GITHUB MODE ----------
+function cfg(){return{owner:$('owner').value.trim(),repo:$('repo').value.trim(),branch:$('branch').value.trim()||'main',token:$('token').value.trim()}}
+function loadCfg(){for(const k of['owner','repo','branch'])$(k).value=localStorage.getItem('rfw_'+k)||($(k).value||'');$('token').value=localStorage.getItem('rfw_token')||''}
+$('saveCfg').onclick=()=>{const c=cfg();for(const k of['owner','repo','branch','token'])localStorage.setItem('rfw_'+k,c[k]);$('cfgMsg').textContent='Saved in this browser.';toast('Settings saved')};
+$('testCfg').onclick=async()=>{const c=cfg();if(!c.owner||!c.repo||!c.token){$('cfgMsg').textContent='Fill owner, repo and token first.';return}$('cfgMsg').textContent='Testing…';try{const r=await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}`,{headers:{Authorization:'Bearer '+c.token,Accept:'application/vnd.github+json'}});$('cfgMsg').textContent=r.ok?'✅ Connected — repo found.':'❌ '+(await r.text()).slice(0,160)}catch(e){$('cfgMsg').textContent='❌ '+e.message}};
+const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
+async function ghList(){const c={owner:localStorage.getItem('rfw_owner')||$('owner').value.trim(),repo:localStorage.getItem('rfw_repo')||$('repo').value.trim(),branch:localStorage.getItem('rfw_branch')||$('branch').value.trim()||'main',token:localStorage.getItem('rfw_token')||$('token').value.trim()};
+if(!c.owner||!c.repo)return[];try{const h={Accept:'application/vnd.github+json'};if(c.token)h.Authorization='Bearer '+c.token;
+const r=await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/uploads?ref=${encodeURIComponent(c.branch)}`,{headers:h});if(!r.ok)return[];const j=await r.json();if(!Array.isArray(j))return[];
+return j.filter(x=>x.type==='file').map(x=>({id:x.path,name:x.name,original:x.name,path:x.path,size:x.size,mime:'',date:'',rawUrl:x.download_url,pagesUrl:`https://${c.owner}.github.io/${c.repo}/${x.path}`,sha:x.sha}))}catch{return[]}}
+async function ghUpload(file){const c=cfg();if(!c.owner||!c.repo||!c.token){toast('Set owner/repo/token first');return}
+if(file.size>100*1024*1024){toast('GitHub caps files at 100 MB');return}
+const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,120);const fpath='uploads/'+safe;
+const box=document.createElement('div');box.className='file';box.innerHTML=`<div class="meta"><div class="name">${esc(file.name)}</div><progress></progress><div class="detail upmsg">Reading…</div></div>`;$('uploadsGh').prepend(box);
+try{box.querySelector('.upmsg').textContent='Encoding…';const buf=await file.arrayBuffer();const content=b64(buf);
+box.querySelector('.upmsg').textContent='Uploading to GitHub…';
+const r=await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/${encodeURIComponent(fpath).replace(/%2F/g,'/')}`,{method:'PUT',headers:{Authorization:'Bearer '+c.token,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify({message:'Add '+file.name+' via Raw File Website',content,branch:c.branch})});
+if(!r.ok)throw new Error((await r.text()).slice(0,200));const j=await r.json();const raw=j.content.download_url;box.querySelector('.upmsg').textContent='Done • '+fmt(file.size)+' — '+raw;toast('Uploaded ✅');refresh()}catch(e){box.querySelector('.upmsg').textContent='Failed: '+e.message}}
+const fg=$('fileGh');$('browseGh').onclick=e=>{e.stopPropagation();fg.click()};fg.onchange=()=>{[...fg.files].forEach(ghUpload);fg.value=''};
+async function ghDelete(fpath){const o=localStorage.getItem('rfw_owner'),rp=localStorage.getItem('rfw_repo'),br=localStorage.getItem('rfw_branch')||'main',tk=localStorage.getItem('rfw_token');const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+tk};
+const g=await(await fetch(`https://api.github.com/repos/${o}/${rp}/contents/${fpath}?ref=${encodeURIComponent(br)}`,{headers:h})).json();
+await fetch(`https://api.github.com/repos/${o}/${rp}/contents/${fpath}`,{method:'DELETE',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Delete '+fpath+' via Raw File Website',sha:g.sha,branch:br})})}
+detect();
+</script>
+</body>
+</html>

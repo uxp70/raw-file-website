@@ -1,0 +1,12 @@
+{
+  "name": "raw-file-website",
+  "version": "1.0.0",
+  "description": "Raw File Website - upload anything with no file size limit, share via raw links",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
