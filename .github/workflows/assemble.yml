@@ -1,0 +1,58 @@
+name: Assemble big files into direct-link releases
+on:
+  push:
+    branches: [main]
+    paths: ['uploads/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: assemble
+  cancel-in-progress: false
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble manifests and publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG=files
+          INDEX=uploads/files-index.json
+          OWNER_REPO="$GITHUB_REPOSITORY"
+          [ -f "$INDEX" ] || echo '{}' > "$INDEX"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "File Storage" --notes "Big files uploaded via Raw File Website. Each asset is a direct download link."
+          fi
+          CHANGED=0
+          for m in uploads/*.manifest.json; do
+            [ -e "$m" ] || continue
+            if jq -e --arg k "$m" '.[$k]' "$INDEX" >/dev/null; then echo "skip $m (already published)"; continue; fi
+            ORIG=$(jq -r .original "$m")
+            COMPLETE=1
+            while IFS= read -r p; do
+              if [ ! -f "uploads/$p" ]; then echo "wait $m (missing uploads/$p)"; COMPLETE=0; break; fi
+            done < <(jq -r '.parts[]' "$m")
+            [ "$COMPLETE" -eq 1 ] || continue
+            SAFE="$(date +%s)-$(echo "$ORIG" | tr -c 'A-Za-z0-9._-' '_')"
+            TMP=$(mktemp -d)
+            while IFS= read -r p; do cat "uploads/$p" >> "$TMP/$SAFE"; done < <(jq -r '.parts[]' "$m")
+            SIZE=$(stat -c%s "$TMP/$SAFE")
+            gh release upload "$TAG" "$TMP/$SAFE"
+            ASSET_ID=$(gh api "repos/$OWNER_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name==\"$SAFE\") | .id")
+            URL="https://github.com/$OWNER_REPO/releases/download/$TAG/$SAFE"
+            jq --arg k "$m" --arg name "$ORIG" --argjson size "$SIZE" --arg url "$URL" --argjson asset "$ASSET_ID" '.[$k]={name:$name,size:$size,url:$url,assetId:$asset}' "$INDEX" > "$INDEX.tmp" && mv "$INDEX.tmp" "$INDEX"
+            echo "published $ORIG -> $URL"
+            rm -rf "$TMP"
+            CHANGED=1
+          done
+          if [ "$CHANGED" -eq 1 ]; then
+            git config user.name "raw-file-website"
+            git config user.email "raw-file-website@users.noreply.github.com"
+            git add "$INDEX"
+            git commit -m "Index published big files" && git push
+          else
+            echo "nothing new"
+          fi
