@@ -123,6 +123,11 @@ footer{max-width:760px;margin:auto;padding:0 20px 40px;color:var(--mut);font-siz
 <input id="q" type="search" placeholder="🔍 Search…" aria-label="Search files">
 <button id="refresh" class="ghost" type="button">↻</button>
 </div>
+<div class="btnrow" style="margin-top:0">
+<button id="bulkAll" class="ghost small" type="button">☑ Select all</button>
+<button id="bulkNone" class="ghost small" type="button">☐ Clear</button>
+<button id="bulkDel" class="ghost small" type="button" disabled>🗑 Delete selected (<span id="bulkN">0</span>)</button>
+</div>
 <div id="list"><p class="muted">Loading…</p></div>
 </section>
 
@@ -130,7 +135,7 @@ footer{max-width:760px;margin:auto;padding:0 20px 40px;color:var(--mut);font-siz
 <h2>❓ What is a “raw link”?</h2>
 <p class="muted">It's a link that opens the file itself — not a preview page. You can send it to anyone, post it anywhere, or embed it (for example, an image link works directly in a post).</p>
 <p class="muted">Example: <code id="rawExample">…</code></p>
-<p class="muted">Big files are stored in small pieces — a few minutes after upload you get a <b>direct link</b> (the file itself, e.g. <code>github.com/…/releases/download/…/my-app.ipa</code>). Perfect for repo and package-manager URLs.</p>
+<p class="muted">Every link on this site <b>is</b> the file itself — no preview pages, no download buttons. Big files are stored in small pieces — a few minutes after upload you get a <b>raw link</b> (the file itself, e.g. <code>github.com/…/releases/download/…/my-app.ipa</code>). Perfect for repo and package-manager URLs.</p>
 </section>
 
 </main>
@@ -171,12 +176,12 @@ async function init(){
     $('owner').value=c.owner;$('repo').value=c.repo;$('branch').value=c.branch;
     $('token').value=localStorage.getItem('rfw_token')||'';
     $('storeLine').innerHTML='Detected: <code>'+esc(c.owner||'?')+' / '+esc(c.repo||'?')+'</code> — files go in its <code>uploads</code> folder. '+(c.owner?'Looks right? Move on to step 2 👇':'Please fill it in above.');
-    $('limitNote').textContent='Small files upload as one file with a direct raw link; bigger ones (up to 2 GB) are split into small pieces automatically and rejoin on download. ✨';
+    $('limitNote').textContent='Small files upload as one file with a raw link; bigger ones (up to 2 GB) are split automatically and their raw link appears a few minutes later. ✨';
     $('rawExample').textContent='https://raw.githubusercontent.com/'+(c.owner||'you')+'/'+(c.repo||'site')+'/main/uploads/my-photo.png';
     $('footNote').textContent='Free hosting via GitHub Pages';
     await refreshStatus();
   }
-  bindUpload();await refresh();sharedBanner();
+  bindUpload();await refresh();
 }
 
 async function refreshStatus(){
@@ -240,7 +245,6 @@ function upServer(file){
 }
 const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
 const CHUNK=10*1024*1024, DIRECT_TRY=40*1024*1024, BIG_MAX=2*1024*1024*1024; // Contents API rejects ~50MB+ blobs ("too large to be processed"); 10MB pieces are safely under it
-const shareLink=p=>location.origin+location.pathname+'#file='+p;
 async function ghDel(s,path){
   const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
   const g=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
@@ -296,7 +300,9 @@ async function upBig(file,s,prev){
     if(!rm.ok)throw new Error((await rm.text()).slice(0,120));
     bar.value=100;
     const mpath='uploads/'+mname;
-    doneCard(box,file.name+' 📦',shareLink(mpath),file.size);refresh();watchDirect(s,mpath,box);
+    box.querySelector('progress')?.remove();
+    box.querySelector('.st').innerHTML='<span class="okmsg">✅ Saved!</span> '+fmt(file.size);
+    refresh();watchDirect(s,mpath,box);
   }catch(e){st.innerHTML='<span class="err">😕 Stopped: '+esc(e.message)+' — pieces already saved stay in storage; delete them from Your files if you retry.</span>'}
 }
 async function refresh(){
@@ -314,9 +320,9 @@ async function refresh(){
           if(x.name.endsWith('.manifest.json')){
             try{
               const m=await(await fetch(x.download_url)).json();
-              if(m.type==='bigfile'){const hit=idx[x.path]||{};FILES.push({name:m.original+' 📦',size:m.size,raw:hit.url||shareLink(x.path),path:x.path,big:true,img:null,direct:hit.url||null,note:hit.url?'⚡ Direct link — the file itself, no website needed':'Big file in '+m.parts.length+' pieces — direct link appears here a few minutes after upload'});continue}
+              if(m.type==='bigfile'){const hit=idx[x.path]||{};FILES.push({name:m.original+' 📦',size:m.size,raw:hit.url||null,path:x.path,big:true,img:null,direct:hit.url||null,note:hit.url?'⚡ Raw file bytes — paste anywhere':'Big file in '+m.parts.length+' pieces — raw link appears here a few minutes after upload'});continue}
             }catch{}
-            FILES.push({name:x.name,size:x.size,raw:shareLink(x.path),path:x.path,big:true,img:null});
+            FILES.push({name:x.name,size:x.size,raw:null,path:x.path,big:true,img:null,note:'⏳ Raw link cooking'});
           }else FILES.push({name:x.name,size:x.size,raw:x.download_url,path:x.path,img:isImg(x.name)?x.download_url:null});
         }
       }
@@ -327,41 +333,67 @@ async function refresh(){
 function render(){
   const q=($('q').value||'').toLowerCase(),L=$('list');
   const f=FILES.filter(x=>x.name.toLowerCase().includes(q));
-  if(!f.length){L.innerHTML='<p class="muted">'+(FILES.length?'Nothing matches that search.':'🌱 Nothing here yet — add your first file above!')+'</p>';return}
-  L.innerHTML='';
-  f.forEach(e=>{
+  if(!f.length){L.innerHTML='<p class="muted">'+(FILES.length?'Nothing matches that search.':'🌱 Nothing here yet — add your first file above!')+'</p>';VIEW=[];updateBulk();return}
+  L.innerHTML='';VIEW=f;
+  f.forEach((e,i)=>{
     const d=document.createElement('div');d.className='file';
-    d.innerHTML=`<div class="fname">${e.big?'📦':'📄'} ${esc(e.name)}</div><div class="fmeta">${fmt(e.size)}${e.note?' • '+esc(e.note):''}</div>
+    const linkRow=e.raw
+      ? `<div class="flink">${esc(e.raw)}</div><div class="btnrow"><button data-c style="flex:1">📋 Copy link</button><a href="${esc(e.raw)}" target="_blank" rel="noopener"><button class="ghost" type="button">↗ Open</button></a></div>`
+      : `<div class="fmeta">⏳ Raw link still cooking — check back in a few minutes.</div>`;
+    d.innerHTML=`<div style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" data-sel="${i}" aria-label="Select ${esc(e.name)}" style="flex:0 0 auto;width:22px;height:22px;margin-top:4px"><div style="flex:1;min-width:0"><div class="fname">${e.big?'📦':'📄'} ${esc(e.name)}</div><div class="fmeta">${fmt(e.size)}${e.note?' • '+esc(e.note):''}</div>
     ${e.img?`<img class="thumb" src="${esc(e.img)}" alt="" loading="lazy">`:''}
-    <div class="flink">${esc(e.raw)}</div>
-    <div class="btnrow"><button data-c style="flex:1">📋 Copy link</button><a href="${esc(e.raw)}" target="_blank" rel="noopener"><button class="ghost" type="button">↗ Open</button></a><button class="ghost" data-d type="button">🗑</button></div>`;
-    d.querySelector('[data-c]').onclick=()=>copyText(e.raw);
-    d.querySelector('[data-d]').onclick=async()=>{
-      if(!confirm('Remove “'+e.name+'”?'))return;
-      if(MODE==='server'){await fetch('api/files/'+encodeURIComponent(e.id),{method:'DELETE'})}
-      else{
-        const s=store();
-        if(!s.token){toast('👆 Connect first (Settings below)');return}
-        if(e.big){ // remove manifest + every piece + release asset + index entry
-          try{
-            const man=await(await fetch(`https://raw.githubusercontent.com/${s.owner}/${s.repo}/${s.branch}/${e.path}`)).json();
-            for(const p of man.parts||[])await ghDel(s,'uploads/'+p);
-          }catch{}
-          try{
-            const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
-            const idxFile=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
-            const cur=JSON.parse(decodeURIComponent(escape(atob(idxFile.content.replace(/\s/g,'')))));
-            if(cur[e.path]&&cur[e.path].assetId)await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/releases/assets/${cur[e.path].assetId}`,{method:'DELETE',headers:h});
-            delete cur[e.path];
-            await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json`,{method:'PUT',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove index for '+e.path+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(cur,null,1)))),sha:idxFile.sha,branch:s.branch})});
-          }catch{}
-        }
-        await ghDel(s,e.path);
-      }
-      toast('🗑 Removed');refresh();
-    };
+    ${linkRow}
+    </div><button class="ghost" data-d type="button" title="Delete" aria-label="Delete ${esc(e.name)}">🗑</button></div>`;
+    if(e.raw)d.querySelector('[data-c]').onclick=()=>copyText(e.raw);
+    d.querySelector('[data-d]').onclick=()=>deleteOne(e);
+    d.querySelector('[data-sel]').onchange=updateBulk;
     L.appendChild(d);
   });
+  updateBulk();
+}
+let VIEW=[];
+function selectedEntries(){return[...document.querySelectorAll('[data-sel]:checked')].map(c=>VIEW[+c.dataset.sel]).filter(Boolean)}
+function updateBulk(){const n=document.querySelectorAll('[data-sel]:checked').length;$('bulkN').textContent=n;$('bulkDel').disabled=!n}
+$('bulkAll').onclick=()=>{document.querySelectorAll('[data-sel]').forEach(c=>c.checked=true);updateBulk()};
+$('bulkNone').onclick=()=>{document.querySelectorAll('[data-sel]').forEach(c=>c.checked=false);updateBulk()};
+$('bulkDel').onclick=async()=>{
+  const sel=selectedEntries();if(!sel.length)return;
+  const big=sel.filter(e=>e.big).length;
+  const msg=`Delete ${sel.length} file${sel.length>1?'s':''}?\n\n${sel.slice(0,8).map(e=>'• '+e.name).join('\n')}${sel.length>8?'\n… and '+(sel.length-8)+' more':''}${big?'\n\n⚠️ This includes big files — their published raw links will stop working.':''}`;
+  if(!confirm(msg))return;
+  const btn=$('bulkDel');btn.disabled=true;
+  let n=0;for(const e of sel){await deleteEntry(e);n++;btn.innerHTML=`Deleting ${n}/${sel.length}…`}
+  btn.innerHTML='🗑 Delete selected (<span id="bulkN">0</span>)';
+  toast(`🗑 Removed ${n} file${n===1?'':'s'}`);refresh();
+};
+async function deleteOne(e){
+  if(!confirm(`Delete “${e.name}”?${e.big?'\n\n⚠️ This also kills its published raw link.':''}`))return;
+  toast('Deleting…');await deleteEntry(e);toast('🗑 Removed');refresh();
+}
+// Removes a file completely: repo file(s) + release asset + index entry. Each step independent so partial states still clean up.
+async function deleteEntry(e){
+  try{
+    if(MODE==='server'){await fetch('api/files/'+encodeURIComponent(e.id),{method:'DELETE'})}
+    else{
+      const s=store();
+      if(e.big){
+        try{
+          const man=await(await fetch(`https://raw.githubusercontent.com/${s.owner}/${s.repo}/${s.branch}/${e.path}`)).json();
+          for(const p of man.parts||[]){try{await ghDel(s,'uploads/'+p)}catch{}}
+        }catch{}
+        try{await ghDel(s,e.path)}catch{}
+        try{
+          const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
+          const idxFile=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
+          const cur=JSON.parse(decodeURIComponent(escape(atob(idxFile.content.replace(/\s/g,'')))));
+          if(cur[e.path]&&cur[e.path].assetId){try{await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/releases/assets/${cur[e.path].assetId}`,{method:'DELETE',headers:h})}catch{}}
+          delete cur[e.path];
+          await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json`,{method:'PUT',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove index for '+e.path+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(cur,null,1)))),sha:idxFile.sha,branch:s.branch})});
+        }catch{}
+      }
+      else await ghDel(s,e.path);
+    }
+  }catch{}
 }
 // Direct-link index: the assemble workflow publishes big files as release assets (raw bytes, full link)
 let indexCache={t:0,d:{}};
@@ -374,56 +406,22 @@ async function filesIndex(s){
   }catch{}
   indexCache.t=now;return indexCache.d;
 }
-// After a big upload: wait for the assemble workflow, then reveal the full direct link
+// After a big upload: wait for the assemble workflow, then reveal the full raw link
 async function watchDirect(s,mpath,box){
-  const d=document.createElement('div');d.className='fmeta';d.textContent='⏳ Cooking your direct link (a few minutes, one time only)…';box.appendChild(d);
+  const d=document.createElement('div');d.className='fmeta';d.textContent='⏳ Cooking your raw link (a few minutes, one time only)…';box.appendChild(d);
   for(let i=0;i<36;i++){
     await new Promise(r=>setTimeout(r,20000));
     indexCache.t=0;
     const hit=(await filesIndex(s))[mpath];
     if(hit&&hit.url){
-      d.innerHTML='<span class="okmsg">⚡ Direct link ready — this IS the file:</span>';
+      d.innerHTML='<span class="okmsg">⚡ Raw link ready — this IS the file:</span>';
       const l=document.createElement('div');l.className='flink';l.textContent=hit.url;box.appendChild(l);
-      const b=document.createElement('button');b.textContent='📋 Copy direct link';b.onclick=()=>copyText(hit.url);box.appendChild(b);
+      const b=document.createElement('button');b.textContent='📋 Copy raw link';b.onclick=()=>copyText(hit.url);box.appendChild(b);
       refresh();return;
     }
   }
-  d.textContent='Still cooking — the direct link will appear under Your files when ready.';
+  d.textContent='Still cooking — the raw link will appear under Your files when ready.';
 }
-// Someone opened a shared big-file link (#file=...): offer one-click rejoin + download
-let bannerShown=false;
-async function sharedBanner(){
-  if(bannerShown)return;bannerShown=true;
-  const m=location.hash.match(/^#file=(.+)$/);if(!m)return;
-  const g=guess(),s=store();
-  const owner=s.owner||g.owner,repo=s.repo||g.repo,branch=s.branch||'main';
-  if(!owner||!repo)return;
-  try{
-    const url=`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${m[1]}`;
-    const man=await(await fetch(url)).json();
-    if(!man||man.type!=='bigfile')return;
-    const d=document.createElement('div');d.className='file new';
-    d.innerHTML=`<div class="fname">🎁 Shared with you: ${esc(man.original)}</div><div class="fmeta">${fmt(man.size)} • arrives in pieces, rejoins into one file</div><div class="btnrow"><button id="sharedDl">⬇ Download ${esc(man.original)}</button></div><div class="fmeta" id="sharedSt"></div>`;
-    $('list').prepend(d);
-    d.querySelector('#sharedDl').onclick=()=>downloadBig(man,url,d.querySelector('#sharedSt'));
-  }catch{}
-}
-async function downloadBig(man,url,stEl){
-  try{
-    const base=url.slice(0,url.lastIndexOf('/')+1),bufs=[];
-    let done=0;
-    for(const p of man.parts){
-      stEl.textContent=`Fetching piece ${++done} of ${man.parts.length}…`;
-      bufs.push(await(await fetch(base+p)).arrayBuffer());
-    }
-    stEl.textContent='Joining pieces…';
-    const blob=new Blob(bufs,{type:man.mime||'application/octet-stream'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=man.original;a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),60000);
-    stEl.innerHTML='<span class="okmsg">✅ Done — check your downloads!</span>';toast('✅ Download started');
-  }catch(e){stEl.innerHTML='<span class="err">😕 Download hiccup — try again.</span>'}
-}
-window.addEventListener('hashchange',()=>{bannerShown=false;sharedBanner()});
 init();
 </script>
 </body>
