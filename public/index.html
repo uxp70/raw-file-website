@@ -130,6 +130,7 @@ footer{max-width:760px;margin:auto;padding:0 20px 40px;color:var(--mut);font-siz
 <h2>❓ What is a “raw link”?</h2>
 <p class="muted">It's a link that opens the file itself — not a preview page. You can send it to anyone, post it anywhere, or embed it (for example, an image link works directly in a post).</p>
 <p class="muted">Example: <code id="rawExample">…</code></p>
+<p class="muted">Big files (over 90 MB) are stored in pieces — their link opens this site and rejoins everything into one download with a single click.</p>
 </section>
 
 </main>
@@ -170,12 +171,12 @@ async function init(){
     $('owner').value=c.owner;$('repo').value=c.repo;$('branch').value=c.branch;
     $('token').value=localStorage.getItem('rfw_token')||'';
     $('storeLine').innerHTML='Detected: <code>'+esc(c.owner||'?')+' / '+esc(c.repo||'?')+'</code> — files go in its <code>uploads</code> folder. '+(c.owner?'Looks right? Move on to step 2 👇':'Please fill it in above.');
-    $('limitNote').textContent='Files can be up to 100 MB each (a GitHub rule).';
+    $('limitNote').textContent='Up to 90 MB uploads as a single file; bigger files (up to 2 GB) are split automatically and rejoin when downloaded. ✨';
     $('rawExample').textContent='https://raw.githubusercontent.com/'+(c.owner||'you')+'/'+(c.repo||'site')+'/main/uploads/my-photo.png';
     $('footNote').textContent='Free hosting via GitHub Pages';
     await refreshStatus();
   }
-  bindUpload();refresh();
+  bindUpload();await refresh();sharedBanner();
 }
 
 async function refreshStatus(){
@@ -238,10 +239,18 @@ function upServer(file){
   xhr.send(file);
 }
 const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
+const CHUNK=90*1024*1024, BIG_MAX=2*1024*1024*1024; // GitHub file API caps single files ~100MB; big files split into 90MB pieces
+const shareLink=p=>location.origin+location.pathname+'#file='+p;
+async function ghDel(s,path){
+  const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
+  const g=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
+  await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}`,{method:'DELETE',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove '+path+' via Raw File Website',sha:g.sha,branch:s.branch})});
+}
 async function upGitHub(file){
   const s=store();
   if(!s.token){toast('👆 Grab your free upload key first');$('setup').hidden=false;return}
-  if(file.size>100*1024*1024){toast('😕 Too big — GitHub allows up to 100 MB per file');return}
+  if(file.size>BIG_MAX){toast('😕 Too big — this site handles files up to 2 GB');return}
+  if(file.size>CHUNK)return upBig(file,s);
   const{box,bar,st}=cardShell(file.name);
   try{
     st.textContent='Reading your file… (big ones take a moment)';
@@ -253,6 +262,33 @@ async function upGitHub(file){
     const j=await r.json();bar.value=100;doneCard(box,file.name,j.content.download_url,file.size);refresh();
   }catch(e){st.innerHTML='<span class="err">😕 That didn’t work ('+esc(e.message)+') — check Settings.</span>'}
 }
+// Big files: split into ≤90MB pieces + a manifest; recipients rejoin via the share link
+async function upBig(file,s){
+  const{box,bar,st}=cardShell(file.name+' 📦');
+  try{
+    const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,80);
+    const n=Math.ceil(file.size/CHUNK);
+    const api=`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/`;
+    const H={Authorization:'Bearer '+s.token,Accept:'application/vnd.github+json','Content-Type':'application/json'};
+    const parts=[];
+    for(let i=0;i<n;i++){
+      st.textContent=`Saving piece ${i+1} of ${n}… keep this tab open ☕`;
+      const slice=file.slice(i*CHUNK,Math.min(file.size,(i+1)*CHUNK));
+      const content=b64(await slice.arrayBuffer());
+      const pname=`${safe}.part${String(i+1).padStart(3,'0')}`;
+      const r=await fetch(api+pname,{method:'PUT',headers:H,body:JSON.stringify({message:`Add piece ${i+1}/${n} of ${file.name} via Raw File Website`,content,branch:s.branch})});
+      if(!r.ok)throw new Error('piece '+(i+1)+': '+(await r.text()).slice(0,120));
+      parts.push(pname);bar.value=Math.round((i+1)/n*90);
+    }
+    st.textContent='Almost done — saving the manifest…';
+    const mname=`${safe}.manifest.json`;
+    const manifest={type:'bigfile',original:file.name,size:file.size,mime:file.type||'application/octet-stream',parts,created:new Date().toISOString()};
+    const rm=await fetch(api+mname,{method:'PUT',headers:H,body:JSON.stringify({message:'Add manifest for '+file.name+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(manifest)))),branch:s.branch})});
+    if(!rm.ok)throw new Error((await rm.text()).slice(0,120));
+    bar.value=100;
+    doneCard(box,file.name+' 📦',shareLink('uploads/'+mname),file.size);refresh();
+  }catch(e){st.innerHTML='<span class="err">😕 Stopped: '+esc(e.message)+' — pieces already saved stay in storage; delete them from Your files if you retry.</span>'}
+}
 async function refresh(){
   if(MODE==='server'){try{const j=await(await fetch('api/files')).json();const isImg=n=>/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(n||'');FILES=j.map(x=>({name:x.original,size:x.size,raw:location.origin+'/raw/'+x.id,id:x.id,img:isImg(x.original)?location.origin+'/raw/'+x.id:null}))}catch{FILES=[]}}
   else{
@@ -261,7 +297,18 @@ async function refresh(){
       const h={Accept:'application/vnd.github+json'};if(s.token)h.Authorization='Bearer '+s.token;
       const r=await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads?ref=${encodeURIComponent(s.branch)}`,{headers:h});
       const j=await r.json();
-      if(Array.isArray(j))FILES=j.filter(x=>x.type==='file').map(x=>({name:x.name,size:x.size,raw:x.download_url,path:x.path,img:/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(x.name)?x.download_url:null}));
+      if(Array.isArray(j)){
+        const isImg=n=>/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(n||'');
+        for(const x of j.filter(x=>x.type==='file'&&!/\.part\d+$/.test(x.name))){
+          if(x.name.endsWith('.manifest.json')){
+            try{
+              const m=await(await fetch(x.download_url)).json();
+              if(m.type==='bigfile'){FILES.push({name:m.original+' 📦',size:m.size,raw:shareLink(x.path),path:x.path,big:true,img:null,note:'Big file in '+m.parts.length+' pieces — opens as one download'});continue}
+            }catch{}
+            FILES.push({name:x.name,size:x.size,raw:shareLink(x.path),path:x.path,big:true,img:null});
+          }else FILES.push({name:x.name,size:x.size,raw:x.download_url,path:x.path,img:isImg(x.name)?x.download_url:null});
+        }
+      }
     }catch{}}
   }
   render();
@@ -273,7 +320,7 @@ function render(){
   L.innerHTML='';
   f.forEach(e=>{
     const d=document.createElement('div');d.className='file';
-    d.innerHTML=`<div class="fname">📄 ${esc(e.name)}</div><div class="fmeta">${fmt(e.size)}</div>
+    d.innerHTML=`<div class="fname">${e.big?'📦':'📄'} ${esc(e.name)}</div><div class="fmeta">${fmt(e.size)}${e.note?' • '+esc(e.note):''}</div>
     ${e.img?`<img class="thumb" src="${esc(e.img)}" alt="" loading="lazy">`:''}
     <div class="flink">${esc(e.raw)}</div>
     <div class="btnrow"><button data-c style="flex:1">📋 Copy link</button><a href="${esc(e.raw)}" target="_blank" rel="noopener"><button class="ghost" type="button">↗ Open</button></a><button class="ghost" data-d type="button">🗑</button></div>`;
@@ -282,15 +329,53 @@ function render(){
       if(!confirm('Remove “'+e.name+'”?'))return;
       if(MODE==='server'){await fetch('api/files/'+encodeURIComponent(e.id),{method:'DELETE'})}
       else{
-        const s=store(),h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
-        const g=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${e.path}?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
-        await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${e.path}`,{method:'DELETE',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove '+e.path+' via Raw File Website',sha:g.sha,branch:s.branch})});
+        const s=store();
+        if(!s.token){toast('👆 Connect first (Settings below)');return}
+        if(e.big){ // remove manifest + every piece
+          const man=await(await fetch(`https://raw.githubusercontent.com/${s.owner}/${s.repo}/${s.branch}/${e.path}`)).json();
+          for(const p of man.parts||[])await ghDel(s,'uploads/'+p);
+        }
+        await ghDel(s,e.path);
       }
       toast('🗑 Removed');refresh();
     };
     L.appendChild(d);
   });
 }
+// Someone opened a shared big-file link (#file=...): offer one-click rejoin + download
+let bannerShown=false;
+async function sharedBanner(){
+  if(bannerShown)return;bannerShown=true;
+  const m=location.hash.match(/^#file=(.+)$/);if(!m)return;
+  const g=guess(),s=store();
+  const owner=s.owner||g.owner,repo=s.repo||g.repo,branch=s.branch||'main';
+  if(!owner||!repo)return;
+  try{
+    const url=`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${m[1]}`;
+    const man=await(await fetch(url)).json();
+    if(!man||man.type!=='bigfile')return;
+    const d=document.createElement('div');d.className='file new';
+    d.innerHTML=`<div class="fname">🎁 Shared with you: ${esc(man.original)}</div><div class="fmeta">${fmt(man.size)} • arrives in pieces, rejoins into one file</div><div class="btnrow"><button id="sharedDl">⬇ Download ${esc(man.original)}</button></div><div class="fmeta" id="sharedSt"></div>`;
+    $('list').prepend(d);
+    d.querySelector('#sharedDl').onclick=()=>downloadBig(man,url,d.querySelector('#sharedSt'));
+  }catch{}
+}
+async function downloadBig(man,url,stEl){
+  try{
+    const base=url.slice(0,url.lastIndexOf('/')+1),bufs=[];
+    let done=0;
+    for(const p of man.parts){
+      stEl.textContent=`Fetching piece ${++done} of ${man.parts.length}…`;
+      bufs.push(await(await fetch(base+p)).arrayBuffer());
+    }
+    stEl.textContent='Joining pieces…';
+    const blob=new Blob(bufs,{type:man.mime||'application/octet-stream'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=man.original;a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+    stEl.innerHTML='<span class="okmsg">✅ Done — check your downloads!</span>';toast('✅ Download started');
+  }catch(e){stEl.innerHTML='<span class="err">😕 Download hiccup — try again.</span>'}
+}
+window.addEventListener('hashchange',()=>{bannerShown=false;sharedBanner()});
 init();
 </script>
 </body>
