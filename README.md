@@ -15,8 +15,8 @@ GitHub Pages can't run an upload server, so this site stores uploads **inside yo
 
 > GitHub caps single files at **100 MB each** (and Git LFS can't help here: its upload server blocks browsers, its free quota is only 1 GB storage + 1 GB/month bandwidth, and LFS-tracked files serve as pointer text on raw links — which would break this site). So big files are handled by **automatic splitting instead**:
 
-- Files up to **90 MB** upload as one file with a direct raw link.
-- Files **90 MB – 2 GB** are split into 90 MB pieces + a small manifest, all in `uploads/`. The file appears as one 📦 entry; its link opens the site and rejoins everything into a single download with one click.
+- Files up to **~40 MB** upload as one file with a direct raw link (if GitHub refuses one, the site splits it automatically and tells you).
+- Files **~40 MB – 1 GB** are split into 10 MB pieces + a small manifest, all in `uploads/` (the API rejects bigger single blobs, so small pieces keep uploads reliable). The file appears as one 📦 entry; its link opens the site and rejoins everything into a single download with one click.
 - Deleting a 📦 entry removes the manifest and all its pieces.
 
 ## Deploy to GitHub Pages (3 minutes)

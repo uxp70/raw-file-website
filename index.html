@@ -130,7 +130,7 @@ footer{max-width:760px;margin:auto;padding:0 20px 40px;color:var(--mut);font-siz
 <h2>❓ What is a “raw link”?</h2>
 <p class="muted">It's a link that opens the file itself — not a preview page. You can send it to anyone, post it anywhere, or embed it (for example, an image link works directly in a post).</p>
 <p class="muted">Example: <code id="rawExample">…</code></p>
-<p class="muted">Big files (over 90 MB) are stored in pieces — their link opens this site and rejoins everything into one download with a single click.</p>
+<p class="muted">Big files are stored in small pieces — their link opens this site and rejoins everything into one download with a single click.</p>
 </section>
 
 </main>
@@ -171,7 +171,7 @@ async function init(){
     $('owner').value=c.owner;$('repo').value=c.repo;$('branch').value=c.branch;
     $('token').value=localStorage.getItem('rfw_token')||'';
     $('storeLine').innerHTML='Detected: <code>'+esc(c.owner||'?')+' / '+esc(c.repo||'?')+'</code> — files go in its <code>uploads</code> folder. '+(c.owner?'Looks right? Move on to step 2 👇':'Please fill it in above.');
-    $('limitNote').textContent='Up to 90 MB uploads as a single file; bigger files (up to 2 GB) are split automatically and rejoin when downloaded. ✨';
+    $('limitNote').textContent='Small files upload as one file with a direct raw link; bigger ones (up to 1 GB) are split into small pieces automatically and rejoin on download. ✨';
     $('rawExample').textContent='https://raw.githubusercontent.com/'+(c.owner||'you')+'/'+(c.repo||'site')+'/main/uploads/my-photo.png';
     $('footNote').textContent='Free hosting via GitHub Pages';
     await refreshStatus();
@@ -239,7 +239,7 @@ function upServer(file){
   xhr.send(file);
 }
 const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
-const CHUNK=90*1024*1024, BIG_MAX=2*1024*1024*1024; // GitHub file API caps single files ~100MB; big files split into 90MB pieces
+const CHUNK=10*1024*1024, DIRECT_TRY=40*1024*1024, BIG_MAX=1024*1024*1024; // Contents API rejects ~50MB+ blobs ("too large to be processed"); 10MB pieces are safely under it
 const shareLink=p=>location.origin+location.pathname+'#file='+p;
 async function ghDel(s,path){
   const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
@@ -249,22 +249,31 @@ async function ghDel(s,path){
 async function upGitHub(file){
   const s=store();
   if(!s.token){toast('👆 Grab your free upload key first');$('setup').hidden=false;return}
-  if(file.size>BIG_MAX){toast('😕 Too big — this site handles files up to 2 GB');return}
-  if(file.size>CHUNK)return upBig(file,s);
+  if(file.size>BIG_MAX){toast('😕 Too big — this site handles files up to 1 GB');return}
+  if(file.size>DIRECT_TRY)return upBig(file,s);
+  return upDirect(file,s);
+}
+// Try one single file first (keeps the pretty raw link); if GitHub says too large, split automatically
+async function upDirect(file,s){
   const{box,bar,st}=cardShell(file.name);
   try{
-    st.textContent='Reading your file… (big ones take a moment)';
+    st.textContent='Reading your file…';
     const content=b64(await file.arrayBuffer());
     st.textContent='Saving…';bar.value=50;
     const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,100);
     const r=await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/${safe}`,{method:'PUT',headers:{Authorization:'Bearer '+s.token,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify({message:'Add '+file.name+' via Raw File Website',content,branch:s.branch})});
-    if(!r.ok)throw new Error(await r.text().then(t=>t.slice(0,120)));
+    if(!r.ok){
+      const t=await r.text();
+      if(/too large/i.test(t)){box.querySelector('.fname').textContent=file.name+' 📦';return upBig(file,s,{box,bar,st})}
+      throw new Error(t.slice(0,300));
+    }
     const j=await r.json();bar.value=100;doneCard(box,file.name,j.content.download_url,file.size);refresh();
   }catch(e){st.innerHTML='<span class="err">😕 That didn’t work ('+esc(e.message)+') — check Settings.</span>'}
 }
-// Big files: split into ≤90MB pieces + a manifest; recipients rejoin via the share link
-async function upBig(file,s){
-  const{box,bar,st}=cardShell(file.name+' 📦');
+// Big files: split into 10MB pieces + a manifest; recipients rejoin via the share link
+async function upBig(file,s,prev){
+  const{box,bar,st}=prev||cardShell(file.name+' 📦');
+  bar.value=0;
   try{
     const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,80);
     const n=Math.ceil(file.size/CHUNK);
