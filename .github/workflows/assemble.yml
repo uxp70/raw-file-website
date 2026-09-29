@@ -40,7 +40,7 @@ jobs:
             TMP=$(mktemp -d)
             while IFS= read -r p; do cat "uploads/$p" >> "$TMP/$SAFE"; done < <(jq -r '.parts[]' "$m")
             SIZE=$(stat -c%s "$TMP/$SAFE")
-            gh release upload "$TAG" "$TMP/$SAFE"
+            gh release upload "$TAG" "$TMP/$SAFE" --clobber
             ASSET_ID=$(gh api "repos/$OWNER_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name==\"$SAFE\") | .id")
             URL="https://github.com/$OWNER_REPO/releases/download/$TAG/$SAFE"
             jq --arg k "$m" --arg name "$ORIG" --argjson size "$SIZE" --arg url "$URL" --argjson asset "$ASSET_ID" '.[$k]={name:$name,size:$size,url:$url,assetId:$asset}' "$INDEX" > "$INDEX.tmp" && mv "$INDEX.tmp" "$INDEX"
@@ -51,7 +51,7 @@ jobs:
           if [ "$CHANGED" -eq 1 ]; then
             git config user.name "raw-file-website"
             git config user.email "raw-file-website@users.noreply.github.com"
-            git add "$INDEX"
+            git add -f "$INDEX"
             git commit -m "Index published big files" && git push
           else
             echo "nothing new"
