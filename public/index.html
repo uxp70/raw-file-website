@@ -171,7 +171,7 @@ async function init(){
     $('owner').value=c.owner;$('repo').value=c.repo;$('branch').value=c.branch;
     $('token').value=localStorage.getItem('rfw_token')||'';
     $('storeLine').innerHTML='Detected: <code>'+esc(c.owner||'?')+' / '+esc(c.repo||'?')+'</code> — files go in its <code>uploads</code> folder. '+(c.owner?'Looks right? Move on to step 2 👇':'Please fill it in above.');
-    $('limitNote').textContent='Small files upload as one file with a direct raw link; bigger ones (up to 1 GB) are split into small pieces automatically and rejoin on download. ✨';
+    $('limitNote').textContent='Small files upload as one file with a direct raw link; bigger ones (up to 2 GB) are split into small pieces automatically and rejoin on download. ✨';
     $('rawExample').textContent='https://raw.githubusercontent.com/'+(c.owner||'you')+'/'+(c.repo||'site')+'/main/uploads/my-photo.png';
     $('footNote').textContent='Free hosting via GitHub Pages';
     await refreshStatus();
@@ -239,7 +239,7 @@ function upServer(file){
   xhr.send(file);
 }
 const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
-const CHUNK=10*1024*1024, DIRECT_TRY=40*1024*1024, BIG_MAX=1024*1024*1024; // Contents API rejects ~50MB+ blobs ("too large to be processed"); 10MB pieces are safely under it
+const CHUNK=10*1024*1024, DIRECT_TRY=40*1024*1024, BIG_MAX=2*1024*1024*1024; // Contents API rejects ~50MB+ blobs ("too large to be processed"); 10MB pieces are safely under it
 const shareLink=p=>location.origin+location.pathname+'#file='+p;
 async function ghDel(s,path){
   const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
@@ -249,7 +249,7 @@ async function ghDel(s,path){
 async function upGitHub(file){
   const s=store();
   if(!s.token){toast('👆 Grab your free upload key first');$('setup').hidden=false;return}
-  if(file.size>BIG_MAX){toast('😕 Too big — this site handles files up to 1 GB');return}
+  if(file.size>BIG_MAX){toast('😕 Too big — this site handles files up to 2 GB');return}
   if(file.size>DIRECT_TRY)return upBig(file,s);
   return upDirect(file,s);
 }
