@@ -3,3 +3,4 @@ data.json
 uploads/*
 !uploads/.gitkeep
 !uploads/files-index.json
+!uploads/list.json
