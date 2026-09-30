@@ -244,11 +244,35 @@ function upServer(file){
   xhr.send(file);
 }
 const b64=buf=>{const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)};
+// All GitHub writes go through one queue (parallel uploads can't race the branch),
+// with auto-retry on ref races ("is at X but expected Y") and server hiccups.
+let writeChain=Promise.resolve();
+function queued(fn){const p=writeChain.then(fn,fn);writeChain=p.catch(()=>{});return p}
+const RETRYABLE=/but expected|fast-forward|conflict|secondary rate|bad gateway|service unavailable|gateway timeout|socket hang up|fetch failed|network|50\d/i;
+function ghPut(url,makeOpts,tries=4){
+  return queued(async()=>{
+    let last='network hiccup';
+    for(let a=0;a<tries;a++){
+      try{
+        const r=await fetch(url,makeOpts());
+        if(r.ok)return r;
+        last=await r.text();
+        if(/too large|validation failed|already exists/i.test(last)||r.status===401||r.status===403||r.status===404)throw new Error(last.slice(0,300));
+      }catch(e){
+        last=(e&&e.message)||String(e);
+        const canRetry=RETRYABLE.test(last)||(e instanceof TypeError);
+        if(!canRetry||a===tries-1)throw new Error(String(last).slice(0,300));
+      }
+      await new Promise(res=>setTimeout(res,[1500,4000,10000][a]||15000));
+    }
+    throw new Error(String(last).slice(0,300));
+  });
+}
 const CHUNK=10*1024*1024, DIRECT_TRY=40*1024*1024, BIG_MAX=2*1024*1024*1024; // Contents API rejects ~50MB+ blobs ("too large to be processed"); 10MB pieces are safely under it
 async function ghDel(s,path){
   const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
   const g=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
-  await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}`,{method:'DELETE',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove '+path+' via Raw File Website',sha:g.sha,branch:s.branch})});
+  await queued(()=>fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}`,{method:'DELETE',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove '+path+' via Raw File Website',sha:g.sha,branch:s.branch})}));
 }
 async function upGitHub(file){
   const s=store();
@@ -265,7 +289,7 @@ async function upDirect(file,s){
     const content=b64(await file.arrayBuffer());
     st.textContent='Saving…';bar.value=50;
     const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,100);
-    const r=await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/${safe}`,{method:'PUT',headers:{Authorization:'Bearer '+s.token,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify({message:'Add '+file.name+' via Raw File Website',content,branch:s.branch})});
+    const r=await ghPut(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/${safe}`,()=>({method:'PUT',headers:{Authorization:'Bearer '+s.token,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify({message:'Add '+file.name+' via Raw File Website',content,branch:s.branch})}));
     if(!r.ok){
       const t=await r.text();
       if(/too large/i.test(t)){box.querySelector('.fname').textContent=file.name+' 📦';return upBig(file,s,{box,bar,st})}
@@ -274,36 +298,47 @@ async function upDirect(file,s){
     const j=await r.json();bar.value=100;doneCard(box,file.name,j.content.download_url,file.size);refresh();
   }catch(e){st.innerHTML='<span class="err">😕 That didn’t work ('+esc(e.message)+') — check Settings.</span>'}
 }
-// Big files: split into 10MB pieces + a manifest; recipients rejoin via the share link
+// Big files: split into 10MB pieces + a manifest. Stalls keep saved pieces with Resume/Discard buttons.
 async function upBig(file,s,prev){
   const{box,bar,st}=prev||cardShell(file.name+' 📦');
   bar.value=0;
+  const safe=(prev&&prev.safe)||(Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,80));
   try{
-    const safe=Date.now()+'-'+file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,80);
     const n=Math.ceil(file.size/CHUNK);
     const api=`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/`;
     const H={Authorization:'Bearer '+s.token,Accept:'application/vnd.github+json','Content-Type':'application/json'};
-    const parts=[];
-    for(let i=0;i<n;i++){
+    const put=(pname,msg,content)=>ghPut(api+pname,()=>({method:'PUT',headers:H,body:JSON.stringify({message:msg,content,branch:s.branch})}));
+    const parts=(prev&&prev.parts)||[];
+    for(let i=parts.length;i<n;i++){
       st.textContent=`Saving piece ${i+1} of ${n}… keep this tab open ☕`;
       const slice=file.slice(i*CHUNK,Math.min(file.size,(i+1)*CHUNK));
       const content=b64(await slice.arrayBuffer());
       const pname=`${safe}.part${String(i+1).padStart(3,'0')}`;
-      const r=await fetch(api+pname,{method:'PUT',headers:H,body:JSON.stringify({message:`Add piece ${i+1}/${n} of ${file.name} via Raw File Website`,content,branch:s.branch})});
-      if(!r.ok)throw new Error('piece '+(i+1)+': '+(await r.text()).slice(0,120));
-      parts.push(pname);bar.value=Math.round((i+1)/n*90);
+      try{await put(pname,`Add piece ${i+1}/${n} of ${file.name} via Raw File Website`,content)}
+      catch(e){if(/already exists/i.test(e.message)){/* saved on a lost response — carry on */}else throw new Error('piece '+(i+1)+': '+e.message)}
+      if(!parts.includes(pname))parts.push(pname);
+      bar.value=Math.round(parts.length/n*90);
     }
     st.textContent='Almost done — saving the manifest…';
     const mname=`${safe}.manifest.json`;
     const manifest={type:'bigfile',original:file.name,size:file.size,mime:file.type||'application/octet-stream',parts,created:new Date().toISOString()};
-    const rm=await fetch(api+mname,{method:'PUT',headers:H,body:JSON.stringify({message:'Add manifest for '+file.name+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(manifest)))),branch:s.branch})});
-    if(!rm.ok)throw new Error((await rm.text()).slice(0,120));
+    await put(mname,'Add manifest for '+file.name+' via Raw File Website',btoa(unescape(encodeURIComponent(JSON.stringify(manifest)))));
     bar.value=100;
     const mpath='uploads/'+mname;
     box.querySelector('progress')?.remove();
     box.querySelector('.st').innerHTML='<span class="okmsg">✅ Saved!</span> '+fmt(file.size);
     refresh();watchDirect(s,mpath,box);
-  }catch(e){st.innerHTML='<span class="err">😕 Stopped: '+esc(e.message)+' — pieces already saved stay in storage; delete them from Your files if you retry.</span>'}
+  }catch(e){
+    const saved=(prev&&prev.parts)||[];
+    const why=/but expected|fast-forward/i.test(e.message)?'GitHub got two saves at once':e.message;
+    st.innerHTML=`<span class="err">😕 Paused: ${esc(why)}. Your ${saved.length} saved piece${saved.length===1?' is':'s are'} safe in storage.</span>`;
+    const row=document.createElement('div');row.className='btnrow';
+    const rb=document.createElement('button');rb.textContent=`↻ Resume from piece ${saved.length+1}`;
+    rb.onclick=()=>{row.remove();st.textContent='Resuming…';upBig(file,s,{box,bar,st,safe,parts:saved})};
+    const db=document.createElement('button');db.className='ghost';db.textContent='Discard saved pieces';
+    db.onclick=async()=>{db.disabled=true;db.textContent='Clearing…';for(const p of saved){try{await ghDel(s,'uploads/'+p)}catch{}}st.innerHTML='<span class="muted">Cleared — upload again any time.</span>';row.remove()};
+    row.append(rb,db);box.appendChild(row);
+  }
 }
 async function refresh(){
   if(MODE==='server'){try{const j=await(await fetch('api/files')).json();const isImg=n=>/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(n||'');FILES=j.map(x=>({name:x.original,size:x.size,raw:location.origin+'/raw/'+x.id,id:x.id,img:isImg(x.original)?location.origin+'/raw/'+x.id:null}))}catch{FILES=[]}}
@@ -386,9 +421,9 @@ async function deleteEntry(e){
           const h={Accept:'application/vnd.github+json',Authorization:'Bearer '+s.token};
           const idxFile=await(await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json?ref=${encodeURIComponent(s.branch)}`,{headers:h})).json();
           const cur=JSON.parse(decodeURIComponent(escape(atob(idxFile.content.replace(/\s/g,'')))));
-          if(cur[e.path]&&cur[e.path].assetId){try{await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/releases/assets/${cur[e.path].assetId}`,{method:'DELETE',headers:h})}catch{}}
+          if(cur[e.path]&&cur[e.path].assetId){try{await queued(()=>fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/releases/assets/${cur[e.path].assetId}`,{method:'DELETE',headers:h}))}catch{}}
           delete cur[e.path];
-          await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json`,{method:'PUT',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove index for '+e.path+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(cur,null,1)))),sha:idxFile.sha,branch:s.branch})});
+          await ghPut(`https://api.github.com/repos/${s.owner}/${s.repo}/contents/uploads/files-index.json`,()=>({method:'PUT',headers:{...h,'Content-Type':'application/json'},body:JSON.stringify({message:'Remove index for '+e.path+' via Raw File Website',content:btoa(unescape(encodeURIComponent(JSON.stringify(cur,null,1)))),sha:idxFile.sha,branch:s.branch})}),2);
         }catch{}
       }
       else await ghDel(s,e.path);

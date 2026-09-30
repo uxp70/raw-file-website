@@ -18,6 +18,7 @@ GitHub Pages can't run an upload server, so this site stores uploads **inside yo
 - Files up to **~40 MB** upload as one file with a direct raw link (if GitHub refuses one, the site splits it automatically and tells you).
 - Files **~40 MB – 2 GB** are split into 10 MB pieces + a small manifest, all in `uploads/` (the API rejects bigger single blobs, so small pieces keep uploads reliable). The file appears as one 📦 entry. Then the **assemble workflow** (`.github/workflows/assemble.yml`) automatically reassembles the pieces and publishes the file as a **release asset** — a few minutes after upload the entry shows a true **raw link** like `https://github.com/OWNER/REPO/releases/download/files/123-my-app.ipa` that serves the raw bytes. Every link on the site is raw file bytes — no preview pages. Links are tracked in `uploads/files-index.json`.
 - **Deleting:** tick files (or Select all) → Delete selected. Deleting a 📦 entry removes its pieces, manifest, published asset and index entry — its raw link stops working.
+- **Reliability:** all saves go through one queue with auto-retry, so parallel uploads can't trip over each other on the branch. If a big upload stalls, it pauses with **↻ Resume** (continues from the saved pieces) and **Discard** buttons instead of failing.
 - Deleting a 📦 entry removes the manifest and all its pieces.
 
 ## Deploy to GitHub Pages (3 minutes)
