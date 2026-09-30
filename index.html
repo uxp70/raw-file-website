@@ -351,7 +351,7 @@ async function refresh(){
       const idx=await filesIndex(s);
       if(Array.isArray(j)){
         const isImg=n=>/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(n||'');
-        for(const x of j.filter(x=>x.type==='file'&&!/\.part\d+$/.test(x.name))){
+        for(const x of j.filter(x=>x.type==='file'&&!/\.part\d+$/.test(x.name)&&!/^\./.test(x.name)&&x.name!=='files-index.json')){
           if(x.name.endsWith('.manifest.json')){
             try{
               const m=await(await fetch(x.download_url)).json();
