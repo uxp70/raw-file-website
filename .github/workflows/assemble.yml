@@ -38,7 +38,8 @@ jobs:
               if [ ! -f "uploads/$p" ]; then echo "wait $m (missing uploads/$p)"; COMPLETE=0; break; fi
             done < <(jq -r '.parts[]' "$m")
             [ "$COMPLETE" -eq 1 ] || continue
-            SAFE="$(date +%s)-$(echo "$ORIG" | tr -c 'A-Za-z0-9._-' '_')"
+            # printf (not echo) so a trailing newline isn't turned into "_" and the original extension is preserved
+            SAFE="$(date +%s)-$(printf '%s' "$ORIG" | tr -c 'A-Za-z0-9._-' '_')"
             TMP=$(mktemp -d)
             while IFS= read -r p; do cat "uploads/$p" >> "$TMP/$SAFE"; done < <(jq -r '.parts[]' "$m")
             SIZE=$(stat -c%s "$TMP/$SAFE")
